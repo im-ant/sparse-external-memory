@@ -10,7 +10,6 @@
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable  # TODO delete, deprecated by pytorch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
@@ -26,19 +25,8 @@ def normal(tensor, mean=0, std=1):
         >>> nninit.normal(w)
     """
 
-    """
-    NOTE: old code that gave a recursion error TODO delete
-    if isinstance(tensor, Variable):
-        normal(tensor.data, mean=mean, std=std)
-        return tensor
-    else:
-        return tensor.normal_(mean, std)
-    """
-
     nn.init.normal_(tensor, mean=mean, std=std)
     return tensor
-
-    # TODO: there is a recursion error here
 
 
 def uniform(tensor, a=0, b=1):
@@ -52,11 +40,10 @@ def uniform(tensor, a=0, b=1):
         >>> w = torch.Tensor(3, 5)
         >>> nn.init.uniform(w)
     """
-    if isinstance(tensor, Variable):
-        uniform(tensor.data, a=a, b=b)
-        return tensor
 
-    return tensor.uniform_(a, b)
+    nn.init.uniform_(tensor, a=a, b=b)
+
+    return tensor
 
 
 class RNN_LSTM(nn.Module):
@@ -70,8 +57,10 @@ class RNN_LSTM(nn.Module):
 
     def forward(self, x):
         outputs = []
-        h_t = Variable(torch.zeros(x.size(0), self.hidden_size).cuda())
-        c_t = Variable(torch.zeros(x.size(0), self.hidden_size).cuda())
+        h_t = torch.zeros(x.size(0), self.hidden_size,
+                          requires_grad=True).cuda()
+        c_t = torch.zeros(x.size(0), self.hidden_size,
+                          requires_grad=True).cuda()
         for i, input_t in enumerate(x.chunk(x.size(1), dim=1)):
             input_t = input_t.contiguous().view(input_t.size()[0], input_t.size()[-1])
             h_t, c_t = self.lstm1(input_t, (h_t, c_t))
@@ -102,8 +91,10 @@ class RNN_LSTM_truncated(nn.Module):
 
     def forward(self, x):
         outputs = []
-        h_t = Variable(torch.zeros(x.size(0), self.hidden_size).cuda())
-        c_t = Variable(torch.zeros(x.size(0), self.hidden_size).cuda())
+        h_t = torch.zeros(x.size(0), self.hidden_size,
+                          requires_grad=True).cuda()
+        c_t = torch.zeros(x.size(0), self.hidden_size,
+                          requires_grad=True).cuda()
 
         for i, input_t in enumerate(x.chunk(x.size(1), dim=1)):
             input_t = input_t.contiguous().view(input_t.size()[0], input_t.size()[-1])
