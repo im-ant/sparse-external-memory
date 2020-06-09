@@ -14,45 +14,16 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
-def normal(tensor, mean=0, std=1):
-    """Fills the input Tensor or Variable with values drawn from a normal distribution with the given mean and std
-    Args:
-        tensor: a n-dimension torch.Tensor
-        mean: the mean of the normal distribution
-        std: the standard deviation of the normal distribution
-    Examples:
-        >>> w = torch.Tensor(3, 5)
-        >>> nninit.normal(w)
-    """
-
-    nn.init.normal_(tensor, mean=mean, std=std)
-    return tensor
-
-
-def uniform(tensor, a=0, b=1):
-    """Fills the input Tensor or Variable with values drawn from the uniform
-    distribution :math:`U(a, b)`.
-    Args:
-        tensor: an n-dimensional torch.Tensor or autograd.Variable
-        a: the lower bound of the uniform distribution
-        b: the upper bound of the uniform distribution
-    Examples:
-        >>> w = torch.Tensor(3, 5)
-        >>> nn.init.uniform(w)
-    """
-
-    nn.init.uniform_(tensor, a=a, b=b)
-
-    return tensor
-
-
 class RNN_LSTM(nn.Module):
+    """
+    For model comparison
+    """
     def __init__(self, input_size, hidden_size, num_layers, num_classes):
         super(RNN_LSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.num_classes = num_classes
-        self.lstm1 = nn.LSTMCell(input_size, hidden_size)
+        self.lstm = nn.LSTMCell(input_size, hidden_size)
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
@@ -63,7 +34,7 @@ class RNN_LSTM(nn.Module):
                           requires_grad=True).cuda()
         for i, input_t in enumerate(x.chunk(x.size(1), dim=1)):
             input_t = input_t.contiguous().view(input_t.size()[0], input_t.size()[-1])
-            h_t, c_t = self.lstm1(input_t, (h_t, c_t))
+            h_t, c_t = self.lstm(input_t, (h_t, c_t))
             outputs += [h_t]
         outputs = torch.stack(outputs, 1).squeeze(2)
         shp = (outputs.size()[0], outputs.size()[1])
@@ -80,13 +51,16 @@ class RNN_LSTM(nn.Module):
 
 
 class RNN_LSTM_truncated(nn.Module):
+    """
+    For model comparison
+    """
     def __init__(self, input_size, hidden_size, num_layers, num_classes, truncate_length=1):
         super(RNN_LSTM_truncated, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.num_classes = num_classes
         self.truncate_length = truncate_length
-        self.lstm1 = nn.LSTMCell(input_size, hidden_size)
+        self.lstm = nn.LSTMCell(input_size, hidden_size)
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
@@ -99,10 +73,10 @@ class RNN_LSTM_truncated(nn.Module):
         for i, input_t in enumerate(x.chunk(x.size(1), dim=1)):
             input_t = input_t.contiguous().view(input_t.size()[0], input_t.size()[-1])
             if (i + 1) % self.truncate_length == 0:
-                h_t, c_t = self.lstm1(input_t, (h_t.detach(), c_t.detach()))
+                h_t, c_t = self.lstm(input_t, (h_t.detach(), c_t.detach()))
                 # c_t = c_t.detach()
             else:
-                h_t, c_t = self.lstm1(input_t, (h_t, c_t))
+                h_t, c_t = self.lstm(input_t, (h_t, c_t))
             outputs += [h_t]
         outputs = torch.stack(outputs, 1).squeeze(2)
         shp = (outputs.size()[0], outputs.size()[1])
@@ -157,12 +131,6 @@ class Sparse_attention(nn.Module):
         return attn_w_normalize
 
 
-def attention_visualize(attention_timestep, filename):
-    # visualize attention
-    plt.matshow(attention_timestep)
-    filename += '_attention.png'
-    plt.savefig(filename)
-
 
 class self_LSTM_sparse_attn(nn.Module):
     # TODO: change name of module?
@@ -176,7 +144,7 @@ class self_LSTM_sparse_attn(nn.Module):
         Sparse attentive backtracking
         :param input_dim: input dimension
         :param hidden_dim: hidden state dimension
-        :param num_layers: TODO??
+        :param num_layers: NOTE: not used?
         :param num_classes: number of classes to predict for output layer
         :param truncate_length: length of truncated BPTT
         :param block_attn_grad_past: ?? TODO
@@ -199,12 +167,12 @@ class self_LSTM_sparse_attn(nn.Module):
         self.print_attention_step = print_attention_step
 
         # Initialize network components
-        # TODO update initialization
-        self.lstm1 = nn.LSTMCell(input_dim, hidden_dim)
+        self.lstm = nn.LSTMCell(input_dim, hidden_dim)
         self.fc = nn.Linear(hidden_dim * 2, num_classes)
         self.tanh = torch.nn.Tanh()
-        self.w_t = nn.Parameter(normal(torch.Tensor(self.hidden_dim * 2, 1), mean=0.0,
-                                       std=0.01))  # nn.Parameter(torch.zeros(self.hidden_size * 2, 1))
+
+        self.w_t = nn.Parameter(torch.Tensor(self.hidden_dim * 2, 1))
+        nn.init.normal_(self.w_t, mean=0.0, std=0.01)
         self.sparse_attn = Sparse_attention(top_k=self.top_k)
 
     def forward(self, x):
@@ -240,9 +208,9 @@ class self_LSTM_sparse_attn(nn.Module):
             # Feed LSTM, generate hidden and cell states,
             # h_t and c_t both have size (batch, hid_dim)
             if (i + 1) % self.truncate_length == 0:
-                h_t, c_t = self.lstm1(input_t, (h_t.detach(), c_t.detach()))
+                h_t, c_t = self.lstm(input_t, (h_t.detach(), c_t.detach()))
             else:
-                h_t, c_t = self.lstm1(input_t, (h_t, c_t))
+                h_t, c_t = self.lstm(input_t, (h_t, c_t))
 
             # ==
             # Compute raw (non-sparse) attention
@@ -251,7 +219,7 @@ class self_LSTM_sparse_attn(nn.Module):
             h_repeated = (h_t.clone().unsqueeze(1)
                           .repeat(1, cur_mem_size, 1))
 
-            # Concat to [h_t, memory] of shape (batch, mem_size, hid_dim*2)
+            # Concat to [h_t, memory], shape (batch, mem_size, hid_dim*2)
             mlp_h_attn = torch.cat((h_repeated, h_mem), 2)
 
             # (Optimal) block past attention gradient
@@ -329,3 +297,14 @@ class self_LSTM_sparse_attn(nn.Module):
         model_log = ' LSTM Sparse attention in h........topk:' + str(self.top_k) + '....attn_everyk_' + str(
             self.attn_every_k) + '.....truncate_length:' + str(self.truncate_length)
         return (model_name, model_log)
+
+
+
+
+
+def attention_visualize(attention_timestep, filename):
+    # visualize attention
+    plt.matshow(attention_timestep)
+    filename += '_attention.png'
+    plt.savefig(filename)
+
