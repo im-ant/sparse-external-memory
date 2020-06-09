@@ -18,6 +18,7 @@ class RNN_LSTM(nn.Module):
     """
     For model comparison
     """
+
     def __init__(self, input_size, hidden_size, num_layers, num_classes):
         super(RNN_LSTM, self).__init__()
         self.hidden_size = hidden_size
@@ -54,6 +55,7 @@ class RNN_LSTM_truncated(nn.Module):
     """
     For model comparison
     """
+
     def __init__(self, input_size, hidden_size, num_layers, num_classes, truncate_length=1):
         super(RNN_LSTM_truncated, self).__init__()
         self.hidden_size = hidden_size
@@ -101,35 +103,35 @@ class Sparse_attention(nn.Module):
         """
         Sparsify the attention
         :param attn_raw: the original (non-sparse) attention weights,
-                         shape (batch, mem_size)
+                         shape (mem_size, batch)
         :return: attn_w: the attention weights where only the top-k are
                          non-zero, normalized to sum to one;
-                         shape (batch, mem_size)
+                         shape (mem_size, batch)
         """
 
         eps = 10e-8
-        cur_mem_size = attn_raw.size()[1]
+        cur_mem_size = attn_raw.size(0)
 
-        # Compute the k-th largest attention weight (scalar)
+        # Compute the k-th largest attention weight
+        # delta is of size (1, batch)
         if cur_mem_size <= self.top_k:
             # Compute the min if mem_size <= k
-            delta = torch.min(attn_raw, dim=1,
+            delta = torch.min(attn_raw, dim=0,
                               keepdim=True)[0] + eps
         else:
-            delta = torch.topk(attn_raw, self.top_k, dim=1,
-                               sorted=True)[0][:, -1:] + eps
+            delta = torch.topk(attn_raw, self.top_k, dim=0,
+                               sorted=True)[0][-1:, :] + eps
 
         # Linearly shift the top-k weights to be non-zero, set rest to zero
-        attn_w = attn_raw - delta.repeat(1, cur_mem_size)
-        attn_w = torch.clamp(attn_w, min=0)  # (batch, mem_size)
+        attn_w = attn_raw - delta.repeat(cur_mem_size, 1)
+        attn_w = torch.clamp(attn_w, min=0)  # (mem_size, batch)
 
         # Normalize weights to sum to one
-        attn_w_sum = torch.sum(attn_w, dim=1, keepdim=True)  # (batch, 1)
+        attn_w_sum = torch.sum(attn_w, dim=0, keepdim=True)  # (1, batch)
         attn_w_sum = attn_w_sum + eps
-        attn_w_normalize = attn_w / attn_w_sum.repeat(1, cur_mem_size)
+        attn_w_normalize = attn_w / attn_w_sum.repeat(cur_mem_size, 1)
 
         return attn_w_normalize
-
 
 
 class self_LSTM_sparse_attn(nn.Module):
@@ -176,12 +178,18 @@ class self_LSTM_sparse_attn(nn.Module):
         self.sparse_attn = Sparse_attention(top_k=self.top_k)
 
     def forward(self, x):
+        """
+
+        :param x: input of shape (seq_len, batch, input_size):
+                  tensor containing the features of the input sequence
+        :return:: output of shape ((seq_len, batch, input_size)
+        """
         # device
         device = self.fc.weight.device
 
         # Size
-        batch_size = x.size(0)
-        seq_length = x.size(1)  # TODO seq should be dim 0
+        seq_length = x.size(0)
+        batch_size = x.size(1)
         input_size = x.size(2)
 
         # initialize hidden states
@@ -190,16 +198,17 @@ class self_LSTM_sparse_attn(nn.Module):
         c_t = torch.zeros((batch_size, self.hidden_dim),
                           device=device, requires_grad=True)
 
-        # Will eventually grow to (batch_size, seq_length/k, hidden_size)
-        # with more and more concatenations.
-        h_mem = h_t.view(batch_size, 1, self.hidden_dim)
+        # Initialize memory to (1, batch_size, hid_dim)
+        # Will eventually grow to (seq_length/k, batch_size, hid_dim)
+        h_mem = h_t.view(1, batch_size, self.hidden_dim)
 
         h_t_seq_list = []
         m_t_seq_list = []
         attn_w_viz = []
 
-        for i, input_t in enumerate(x.chunk(seq_length, dim=1)):  # TODO seq is dim 0
-            cur_mem_size = h_mem.size(1)  # TODO seq should be dim 0
+        # Iterate over each timept in the seq, size (1, batch, hid_dim)
+        for i, input_t in enumerate(x.chunk(seq_length, dim=0)):
+            cur_mem_size = h_mem.size(0)
 
             # ==
             # Input and one cycle of LSTM
@@ -215,38 +224,38 @@ class self_LSTM_sparse_attn(nn.Module):
             # ==
             # Compute raw (non-sparse) attention
 
-            # Repeat h_t over all memory slots: (batch, mem_size, hid_dim)
-            h_repeated = (h_t.clone().unsqueeze(1)
-                          .repeat(1, cur_mem_size, 1))
+            # Repeat h_t from (batch, hid_dim) to (mem_size, batch, hid_dim)
+            #   one for each memory slot
+            h_repeated = (h_t.clone().unsqueeze(0)
+                          .repeat(cur_mem_size, 1, 1))
 
-            # Concat to [h_t, memory], shape (batch, mem_size, hid_dim*2)
-            mlp_h_attn = torch.cat((h_repeated, h_mem), 2)
+            # Concat to [h_t, memory], shape (mem_size, batch, hid_dim*2)
+            mlp_h_attn = torch.cat((h_repeated, h_mem), dim=2)
 
-            # (Optimal) block past attention gradient
+            # (Optional) block past attention gradient
             if self.block_attn_grad_past:
                 mlp_h_attn = mlp_h_attn.detach()
 
             # Compute attention via tanh then matmul with weight matrix
             # Weight matrix has shape (hid_dim * 2 , 1)
-            # Output (attn_w) has shape (batch, mem_size, 1)
+            # Output (attn_w) has shape (mem_size, batch, 1)
             mlp_h_attn = self.tanh(mlp_h_attn)
             attn_w = torch.matmul(mlp_h_attn, self.w_t)
 
             # ==
             # Sparsify attention: set top-k to non-zero and normalize
-
-            attn_w = attn_w.view(batch_size, cur_mem_size)
+            attn_w = attn_w.view(cur_mem_size, batch_size)
             attn_w = self.sparse_attn(attn_w)
-            attn_w = attn_w.view(batch_size, cur_mem_size, 1)
+            attn_w = attn_w.view(cur_mem_size, batch_size, 1)
 
             # ==
             # Extract from memory using attention
 
             attn_w_rep = attn_w.repeat(1, 1, self.hidden_dim)
-            h_mem_w = attn_w_rep * h_mem  # (batch, mem_size, hid_dim)
+            h_mem_w = attn_w_rep * h_mem  # (mem_size, batch, hid_dim)
 
             # Attention-extracted memory information
-            m_t = torch.sum(h_mem_w, dim=1)  # (batch, hid_dim)
+            m_t = torch.sum(h_mem_w, dim=0)  # (batch, hid_dim)
 
             # Feed attn_c to hidden state h_t
             h_t += m_t  # (batch, hid_dim)
@@ -254,8 +263,8 @@ class self_LSTM_sparse_attn(nn.Module):
             # ==
             # At regular intervals, remember a hidden state
             if (i + 1) % self.remem_every_k == 0:
-                h_mem = torch.cat((h_mem, h_t.view(batch_size,
-                                                   1, self.hidden_dim)), dim=1)
+                h_mem = torch.cat((h_mem, h_t.view(1, batch_size,
+                                                   self.hidden_dim)), dim=0)
 
             # Record outputs
             h_t_seq_list += [h_t]
@@ -263,29 +272,28 @@ class self_LSTM_sparse_attn(nn.Module):
 
             # TODO: not sure what this is doing.
             if self.print_attention_step >= (seq_length - i - 1):
-                attn_w_viz.append(attn_w.mean(dim=0).view(cur_mem_size))
+                attn_w_viz.append(attn_w.mean(dim=1).view(cur_mem_size))
 
         # ==
         # Compute per-timestep output
         #   y_t = V_1 * h_t + V_2 * m_t + b
 
         # Tensors: full sequence of hidden states and per-time memory
-        # TODO seq is dim 0
         h_t_seq = torch.stack(h_t_seq_list,
-                              dim=1)  # (batch, seq_len, hid_dim)
+                              dim=0)  # (seq_len, batch, hid_dim)
         m_t_seq = torch.stack(m_t_seq_list,
-                              dim=1)  # (batch, seq_len, hid_dim)
+                              dim=0)  # (seq_len, batch, hid_dim)
         out_seq = torch.cat((h_t_seq, m_t_seq),
                             dim=2)  # (batch, seq_len, 2 * hid_dim)
 
         # Compute per-timestep output
-        # TODO seq is dim 0
-        out = out_seq.contiguous().view(-1, out_seq.size(2))  # (batch * seq_len, 2 * hid_dim)
+        out = out_seq.contiguous().\
+            view(-1, out_seq.size(2))  # (seq_len * batch, 2 * hid_dim)
         out = self.fc(out)
-        out = out.view(batch_size, seq_length, self.num_classes)
+        out = out.view(seq_length, batch_size, self.num_classes)
 
         # Return values
-        #   out: output values (batch, seq_len, num_classes)
+        #   out: output values (seq_len, batch, num_classes)
         #   attn_w_viz: attention weights for visualization
         return out, attn_w_viz
 
@@ -299,12 +307,8 @@ class self_LSTM_sparse_attn(nn.Module):
         return (model_name, model_log)
 
 
-
-
-
 def attention_visualize(attention_timestep, filename):
     # visualize attention
     plt.matshow(attention_timestep)
     filename += '_attention.png'
     plt.savefig(filename)
-
