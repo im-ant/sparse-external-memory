@@ -137,15 +137,15 @@ class Sparse_attention(nn.Module):
 class self_LSTM_sparse_attn(nn.Module):
     # TODO: change name of module?
 
-    def __init__(self, input_dim, hidden_dim, num_layers, num_classes,
+    def __init__(self, input_size, hidden_size, num_layers, num_classes,
                  truncate_length=100, block_attn_grad_past=False,
                  remem_every_k=1,
                  top_k=5,
                  print_attention_step=1):
         """
         Sparse attentive backtracking
-        :param input_dim: input dimension
-        :param hidden_dim: hidden state dimension
+        :param input_size: input dimension size
+        :param hidden_size: hidden state dimension
         :param num_layers: NOTE: not used?
         :param num_classes: number of classes to predict for output layer
         :param truncate_length: length of truncated BPTT
@@ -157,8 +157,8 @@ class self_LSTM_sparse_attn(nn.Module):
         super(self_LSTM_sparse_attn, self).__init__()
 
         # Attributes
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.input_size = input_size
+        self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.num_classes = num_classes
         self.truncate_length = truncate_length
@@ -169,11 +169,11 @@ class self_LSTM_sparse_attn(nn.Module):
         self.print_attention_step = print_attention_step
 
         # Initialize network components
-        self.lstm = nn.LSTMCell(input_dim, hidden_dim)
-        self.fc = nn.Linear(hidden_dim * 2, num_classes)
+        self.lstm = nn.LSTMCell(input_size, hidden_size)
+        self.fc = nn.Linear(hidden_size * 2, num_classes)
         self.tanh = torch.nn.Tanh()
 
-        self.w_t = nn.Parameter(torch.Tensor(self.hidden_dim * 2, 1))
+        self.w_t = nn.Parameter(torch.Tensor(self.hidden_size * 2, 1))
         nn.init.normal_(self.w_t, mean=0.0, std=0.01)
         self.sparse_attn = Sparse_attention(top_k=self.top_k)
 
@@ -182,7 +182,7 @@ class self_LSTM_sparse_attn(nn.Module):
 
         :param x: input of shape (seq_len, batch, input_size):
                   tensor containing the features of the input sequence
-        :return:: output of shape ((seq_len, batch, input_size)
+        :return:: output of shape (seq_len, batch, num_classes)
         """
         # device
         device = self.fc.weight.device
@@ -193,14 +193,14 @@ class self_LSTM_sparse_attn(nn.Module):
         input_size = x.size(2)
 
         # initialize hidden states
-        h_t = torch.zeros((batch_size, self.hidden_dim),
+        h_t = torch.zeros((batch_size, self.hidden_size),
                           device=device, requires_grad=True)
-        c_t = torch.zeros((batch_size, self.hidden_dim),
+        c_t = torch.zeros((batch_size, self.hidden_size),
                           device=device, requires_grad=True)
 
         # Initialize memory to (1, batch_size, hid_dim)
         # Will eventually grow to (seq_length/k, batch_size, hid_dim)
-        h_mem = h_t.view(1, batch_size, self.hidden_dim)
+        h_mem = h_t.view(1, batch_size, self.hidden_size)
 
         h_t_seq_list = []
         m_t_seq_list = []
@@ -251,7 +251,7 @@ class self_LSTM_sparse_attn(nn.Module):
             # ==
             # Extract from memory using attention
 
-            attn_w_rep = attn_w.repeat(1, 1, self.hidden_dim)
+            attn_w_rep = attn_w.repeat(1, 1, self.hidden_size)
             h_mem_w = attn_w_rep * h_mem  # (mem_size, batch, hid_dim)
 
             # Attention-extracted memory information
@@ -264,7 +264,7 @@ class self_LSTM_sparse_attn(nn.Module):
             # At regular intervals, remember a hidden state
             if (i + 1) % self.remem_every_k == 0:
                 h_mem = torch.cat((h_mem, h_t.view(1, batch_size,
-                                                   self.hidden_dim)), dim=0)
+                                                   self.hidden_size)), dim=0)
 
             # Record outputs
             h_t_seq_list += [h_t]
