@@ -16,7 +16,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 from torch.utils.tensorboard import SummaryWriter
 
-from sab_nn import *
+from sab_classification import *
+import sab_nn
 
 
 def get_data_copying_task(mem_seq_len: int = 4,
@@ -80,8 +81,8 @@ def train(args: argparse.ArgumentParser, device='cpu', logger=None):
     # TODO change this to a pytorch dataloader in the future
     mem_seq_len = 8
     emp_seq_len = 64
-    total_num_data = 100
-    minibatch_size = 20
+    total_num_data = 2000
+    minibatch_size = 100
 
     train_X, train_Y = get_data_copying_task(mem_seq_len=mem_seq_len,
                                              emp_seq_len=emp_seq_len,
@@ -97,7 +98,14 @@ def train(args: argparse.ArgumentParser, device='cpu', logger=None):
     nn_input_size = 1
     num_classes = 10
 
-    if args.model == "sparseattn":
+    if args.model == "sab_lstm":
+        rnn = sab_nn.SAB_LSTM(nn_input_size, args.rnn_dim, num_classes,
+                              args.rnn_layers,
+                              truncate_length=args.trunc,
+                              k_top_attn=args.topk,
+                              remem_every_k=args.attk)
+
+    elif args.model == "sparseattn":
         rnn = self_LSTM_sparse_attn(nn_input_size, args.rnn_dim, args.rnn_layers,
                                     num_classes,
                                     truncate_length=args.trunc,
@@ -149,10 +157,17 @@ def train(args: argparse.ArgumentParser, device='cpu', logger=None):
 
             # NOTE: t_x and t_y are of shape (seq_len, minibatch, input_size)
 
+            # Initialize hidden state run RNN
+            h_0 = torch.zeros(t_x.size(1), args.rnn_dim,
+                              requires_grad=True).to(device)
+            c_t = torch.zeros((t_x.size(1), args.rnn_dim),
+                              requires_grad=True).to(device)
+            mem = h_0.view(1, t_x.size(1), args.rnn_dim)
+
             optimizer.zero_grad()
+            outputs, hxs, mem = rnn(t_x, (h_0, c_t), mem)
 
-            outputs, attn_w_viz = rnn(t_x)
-
+            # Loss on output
             outputs_reshp = outputs.view(-1, num_classes)
             labels_reshp = t_y.reshape(-1)
 
@@ -211,8 +226,8 @@ if __name__ == "__main__":
     # TODO write these?
 
     # Model and config
-    parser.add_argument("--model", default="sparseattn", type=str,
-                        choices=["sparseattn", "sparseattn_predict", "trunc", "baseline", "lstm"],
+    parser.add_argument("--model", default="sab_lstm", type=str,
+                        choices=["sparseattn", "lstm", "sab_lstm"],
                         help="Model Selection.")
 
     parser.add_argument("--rnn_dim", default=128, type=int,

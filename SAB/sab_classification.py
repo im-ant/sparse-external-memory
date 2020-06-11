@@ -1,5 +1,6 @@
 # ============================================================================
-# Sparse attentive backtracking module, adopted for python 3
+# Sparse attentive backtracking module for classification, adopted for
+# python 3. This file is a more faithful copy of the original.
 #
 # Original author: Rosemary Ke (https://github.com/nke001)
 # Original repository: nke001/sparse_attentive_backtracking_release
